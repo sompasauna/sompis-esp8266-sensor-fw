@@ -17,10 +17,15 @@
   #define SLEEP_MULTI 1e6
 #endif
 
+#define DEVICE_ID 1
+#define SENSOR_ID 1
+
 // Data (yellow) is connected to GPIO5
 #define ONE_WIRE_BUS 5
 // Power (red) is connected to GPIO4 which will be pulled up when measuring
 #define ONE_WIRE_POWER_PIN 4
+
+// Used to identify rtc data is not corrupted or from another firmware
 #define RTC_MAGIC 0x55aaaa56
 
 // RTC memory data struct to pass data between deep sleep boots
@@ -305,6 +310,47 @@ void recvPacket() {
   }
 }
 
+void sendReport(int temp) {
+  unsigned char buffer[SensorReport_size];
+  unsigned char buffer_aes[SensorReport_size];
+  size_t message_length;
+  bool status;
+
+  // Start UDP response socket
+  UDP.begin(udpLocalPort);
+
+  SensorReport message = SensorReport_init_zero;
+  pb_ostream_t stream = pb_ostream_from_buffer(buffer, sizeof(buffer));
+
+  message.device_id = DEVICE_ID;
+  message.sensor_id = SENSOR_ID;
+  message.which_value = SensorReport_f_tag;
+  message.value.f = temp;
+  message.wifi_failcount = rtcData.wifi_fail_count;
+  message.boot_count = rtcData.boot_count;
+  message.wifi_id = wifiId;
+  message.millis = millis();
+
+  status = pb_encode(&stream, SensorReport_fields, &message);
+  message_length = stream.bytes_written;
+
+  if (!status) {
+    DEBUG_PRINTF("Encoding failed: %s\n", PB_GET_ERROR(&stream));
+    sleep(60)
+  } else {
+    DEBUG_PRINTF("Message encoded, length: %d bytes", message_length);
+    rtcData.prev_temp = currTemp;
+  }
+
+  aes.do_aes_encrypt(buffer, strlen((char *)buffer), buffer_aes, aes_key, 128, aes_iv);
+  DEBUG_PRINTLN("Sending packet")
+  UDP.beginPacket(udpHost, udpPort);
+  UDP.write(buffer_aes, message_length);
+  UDP.endPacket();
+  yield();
+  recvPacket(); // should put device to sleep
+}
+
 void setup() {
   startTime = millis();
 
@@ -318,11 +364,6 @@ void setup() {
 
   setupTempSensor();
   wakeUpWifi(); // the sensor will do sensor stuff in the background
-
-  unsigned char buffer[SensorReport_size];
-  unsigned char buffer_aes[SensorReport_size];
-  size_t message_length;
-  bool status;
 
   float currTemp = currentTemp();
   float tempDelta = currTemp - rtcData.prev_temp;
@@ -363,39 +404,7 @@ void setup() {
     sleep(3*60);
   }
 
-  // Start UDP response socket
-  UDP.begin(udpLocalPort);
-
-  SensorReport message = SensorReport_init_zero;
-  pb_ostream_t stream = pb_ostream_from_buffer(buffer, sizeof(buffer));
-
-  message.device_id = 1;
-  message.sensor_id = 1;
-  message.which_value = SensorReport_f_tag;
-  message.value.f = currTemp;
-  message.wifi_failcount = rtcData.wifi_fail_count;
-  message.boot_count = rtcData.boot_count;
-  message.wifi_id = wifiId;
-  message.millis = millis();
-
-  status = pb_encode(&stream, SensorReport_fields, &message);
-  message_length = stream.bytes_written;
-
-  if (!status) {
-    DEBUG_PRINTF("Encoding failed: %s\n", PB_GET_ERROR(&stream));
-    sleep(60)
-  } else {
-    DEBUG_PRINTF("Message encoded, length: %d bytes", message_length);
-    rtcData.prev_temp = currTemp;
-  }
-
-  aes.do_aes_encrypt(buffer, strlen((char *)buffer), buffer_aes, aes_key, 128, aes_iv);
-  DEBUG_PRINTLN("Sending packet")
-  UDP.beginPacket(udpHost, udpPort);
-  UDP.write(buffer_aes, message_length);
-  UDP.endPacket();
-  yield();
-  recvPacket(); // should put device to sleep
+  sendReport(currTemp); // should put the device to sleep
   sleep(60); // but make sure
 }
 
