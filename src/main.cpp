@@ -2,7 +2,6 @@
 #include <ESP8266WiFi.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
-//#include "FS.h"
 #include <WiFiUdp.h>
 #include "SompaData.h"
 #include <ESP8266httpUpdate.h>
@@ -18,7 +17,9 @@
   #define SLEEP_MULTI 1e6
 #endif
 
+// Data (yellow) is connected to GPIO5
 #define ONE_WIRE_BUS 5
+// Power (red) is connected to GPIO4 which will be pulled up when measuring
 #define ONE_WIRE_POWER_PIN 4
 #define RTC_MAGIC 0x55aaaa56
 
@@ -64,15 +65,11 @@ unsigned long startTime;
 
 // Write RTC memory, close serial, go to deep sleep
 void sleep(unsigned long seconds) {
-  DEBUG_PRINT("Sleeping: ");
-  DEBUG_PRINTLN(seconds);
-  DEBUG_PRINTLN();
+  DEBUG_PRINTF("Sleeping: %d seconds\n", seconds);
   rtcData.magic = RTC_MAGIC;
   system_rtc_mem_write(66, &rtcData, sizeof(rtcData));
   yield();
-  unsigned long totalElapsed = millis() - startTime;
-  DEBUG_PRINT("Total time: ");
-  DEBUG_PRINTLN(totalElapsed);
+  DEBUG_PRINTF("Total time elapsed: %d millis", millis() - startTime);
   #ifdef DEBUGPRINT
   Serial.end();
   #endif
@@ -87,7 +84,7 @@ void setupTempSensor() {
   DS.begin();
   DS.setWaitForConversion(false);
   DEBUG_PRINTLN();
- 
+
  // If there's no sensor address saved from previous boots, scan for it
   if(rtcData.sensor_address[0] == 0 && (rtcData.sensor_address[1] == 0) {
     DEBUG_PRINTLN("Onewire search..");
@@ -220,9 +217,6 @@ float currentTemp() {
   }
   oneWire.depower();
   digitalWrite(ONE_WIRE_POWER_PIN, LOW);
-  DEBUG_PRINT("Current temp: ");
-  DEBUG_PRINT(tmp);
-  DEBUG_PRINTLN("C");
   return tmp;
 }
 
@@ -232,15 +226,15 @@ bool waitForWifi() {
   while (!WiFi.isConnected()) {
     yield();
     if (millis() - wifiStart > 8000) {
-      DEBUG_PRINT("failed");
+      DEBUG_PRINTLN("failed");
       return false;
     }
     #ifdef DEBUGPRINT
     if((millis() % 1000) == 0) { DEBUG_PRINT("."); }
     #endif
   }
- 
-  DEBUG_PRINTLN("SUCCESS") 
+
+  DEBUG_PRINTLN("SUCCESS")
   DEBUG_PRINTF("Connected to %s\n", WiFi.SSID().c_str());
   return true;
 }
@@ -250,10 +244,10 @@ bool firmwareUrl_callback(pb_istream_t *stream, const pb_field_t *field, void **
     const char* ptr_const = (const char*) buf;
 
     size_t len = stream->bytes_left;
-    
+
     if (len > sizeof(buf) - 1 || !pb_read(stream, buf, len))
         return false;
-    
+
   DEBUG_PRINT("Server wants us to upgrade: '");
   DEBUG_WRITE(buf, len);
   DEBUG_PRINTLN("' firmware");
@@ -269,8 +263,7 @@ bool firmwareUrl_callback(pb_istream_t *stream, const pb_field_t *field, void **
 
     case HTTP_UPDATE_OK:
         DEBUG_PRINTLN("HTTP_UPDATE_OK");
-        DEBUG_PRINTLN("Awesome success!");
-        sleep(1);
+        sleep(10);
         break;
   }
 }
@@ -292,25 +285,19 @@ void recvPacket() {
     }
   }
   UDP.read(packetBuffer_aes, 128);
-  DEBUG_PRINT("Received: ");
-  DEBUG_PRINT(sizeof(packetBuffer_aes));
-  DEBUG_PRINTLN(" bytes");
+  DEBUG_PRINTF("Received: %d bytes\n", sizeof(packetBuffer_aes));
   DEBUG_PRINTLN("Decrypting")
   aes.do_aes_decrypt(packetBuffer_aes, aes.get_size(), packetBuffer, aes_key, 128, aes_iv);
-  DEBUG_PRINT("Resulted in: ");
-  DEBUG_PRINT(sizeof(packetBuffer));
-  DEBUG_PRINTLN(" bytes");
+  DEBUG_PRINTF("Resulted in: %d bytes", sizeof(packetBuffer));
   ServerResponse response = ServerResponse_init_zero;
   response.firmware_url.funcs.decode = &firmwareUrl_callback;
   pb_istream_t stream = pb_istream_from_buffer(packetBuffer, 128);
   if(pb_decode(&stream, ServerResponse_fields, &response)) {
       if(response.goto_sleep_seconds > 0) {
-        DEBUG_PRINT("Server wants us to sleep: ");
-        DEBUG_PRINT(response.goto_sleep_seconds);
-        DEBUG_PRINTLN(" seconds");
+        DEBUG_PRINTF("Server wants us to sleep: %d seconds\n", response.goto_sleep_seconds);
         sleep(response.goto_sleep_seconds);
       } else {
-        DEBUG_PRINT("Server didn't specify sleep seconds?! Going to sleep 2 minutes.");
+        DEBUG_PRINTLN("Server didn't specify sleep seconds?! Going to sleep 2 minutes.");
         sleep(120);
       }
   } else {
@@ -320,15 +307,14 @@ void recvPacket() {
 
 void setup() {
   startTime = millis();
-  
+
   #ifdef DEBUGPRINT
   Serial.begin(115200);
   #endif
 
   setupRtcData();
 
-  DEBUG_PRINT("Boot count: ");
-  DEBUG_PRINTLN(rtcData.boot_count);
+  DEBUG_PRINTF("Boot count: %d\n", rtcData.boot_count);
 
   setupTempSensor();
   wakeUpWifi(); // the sensor will do sensor stuff in the background
@@ -337,25 +323,19 @@ void setup() {
   unsigned char buffer_aes[SensorReport_size];
   size_t message_length;
   bool status;
- 
+
   float currTemp = currentTemp();
   float tempDelta = currTemp - rtcData.prev_temp;
-  
+
   if(rtcData.prev_temp < -120) { tempDelta = 1.0; }
 
-  DEBUG_PRINT("Current temp: ");
-  DEBUG_PRINT(currTemp);
-  DEBUG_PRINTLN("C");
-
-  DEBUG_PRINT("Temp delta: ");
-  DEBUG_PRINT(tempDelta);
-  DEBUG_PRINTLN("C");
+  DEBUG_PRINTF("Current temp: %fC\n - delta: %fC\n", currTemp, tempDelta);
 
   if(cabsf(tempDelta) < 0.5) {
     DEBUG_PRINTLN("Temp delta too small, dont bother connecting WIFI");
     sleep(60);
   }
-  
+
   // Try main wifi until it fails 10 times or if the other wifis have been
   // used (or failed) for over 10 times already, maybe the main wifi is back up.
   if(rtcData.wifi_fail_count < 10 || rtcData.wifi_fail_count > 30) {
@@ -366,7 +346,7 @@ void setup() {
   }
 
   if(waitForWifi()) {
-    if(WiFi.SSID() == wifi_SSID) { 
+    if(WiFi.SSID() == wifi_SSID) {
       DEBUG_PRINTLN("Reset WIFI fail count, connected to primary Wifi");
       rtcData.wifi_fail_count = 0;
 
@@ -379,9 +359,8 @@ void setup() {
     }
   } else {
     rtcData.wifi_fail_count++;
-    DEBUG_PRINT("WIFI fail count: ");
-    DEBUG_PRINTLN(rtcData.wifi_fail_count);
-    sleep(3*60); 
+    DEBUG_PRINTF("WIFI fail count: %d\n", rtcData.wifi_fail_count);
+    sleep(3*60);
   }
 
   // Start UDP response socket
@@ -406,13 +385,12 @@ void setup() {
     DEBUG_PRINTF("Encoding failed: %s\n", PB_GET_ERROR(&stream));
     sleep(60)
   } else {
-    DEBUG_PRINT("Message encoded, length: ");
-    DEBUG_PRINTLN(message_length);
+    DEBUG_PRINTF("Message encoded, length: %d bytes", message_length);
     rtcData.prev_temp = currTemp;
   }
 
   aes.do_aes_encrypt(buffer, strlen((char *)buffer), buffer_aes, aes_key, 128, aes_iv);
-  DEBUG_PRINT("Sending packet")
+  DEBUG_PRINTLN("Sending packet")
   UDP.beginPacket(udpHost, udpPort);
   UDP.write(buffer_aes, message_length);
   UDP.endPacket();
