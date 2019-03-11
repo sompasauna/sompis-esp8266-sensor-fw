@@ -8,6 +8,10 @@ WIP. `main.cpp` may not even compile currently because it was cleaned up massive
 
 It's a platformio project, you can probably load it into it.
 
+### The API
+
+The server side API is at [somppasauna/sompis-sensor-api](https://github.com/sompasauna/sompis-sensor-api).
+
 ## Device
 
 - Esp8266-12E/F/.. chip
