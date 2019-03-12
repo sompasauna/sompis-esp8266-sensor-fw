@@ -18,7 +18,7 @@ const char* wifi_SSID_ALT_2 = "Helsingin kaupungin WLAN"; // Tertiary passwordle
 const IPAddress localIp(10,0,0,200);
 const IPAddress gatewayIp(10,0,0,1); 
 const IPAddress subnetIp(255,255,255,0);
-const IPAddress dnsIp(8,8,8,8);
+const IPAddress dnsIp(127,0,0,1);
 
 // AES Encryption Key
 const byte aes_key[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
