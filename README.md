@@ -43,7 +43,7 @@ The server side API is at [somppasauna/sompis-sensor-api](https://github.com/som
 - The response can also include an URL to a firmware upgrade, and the device can update itself over HTTP. This haven't been tested much and there are some risks involved.
 - The response could also include something like `toggle = X` where `X` could for example be a led / indicator / something. Or `display = "message"` if there was a message display somewhere.
 
-MQTT, HTTP or other "popular" ways to publish / receive IoT data has not been used, because they're surprisingly slow and the messages are lengthy. Also waiting for a response is kind of difficult using MQTT. With the binary UDP protocol buffers thing, the communication is fast and minimal, much unlike a good sauna conversation.
+MQTT, HTTP or other "popular" ways to publish / receive IoT data has not been used, because they're surprisingly slow and the messages are lengthy and the ESP8266 wifi seems to be exceptionally slow. Also waiting for a response is kind of difficult using MQTT. With the binary UDP protocol buffers thing, the communication is fast and minimal, much unlike a good sauna conversation.
 
 As the device sources are now public, the AES-128 encryption was added because "security over obscurity" is no longer valid and it would be too easy to troll the server or device. Especially if an unencrypted wifi (like the city wlan) is used.
 
