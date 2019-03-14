@@ -18,7 +18,8 @@
 #endif
 
 #define DEVICE_ID 1
-#define SENSOR_ID 1
+#define TEMP_SENSOR_ID 1
+#define VOLTAGE_SENSOR_ID 2
 
 // Data (yellow) is connected to GPIO5
 #define ONE_WIRE_BUS 5
@@ -194,6 +195,11 @@ void sendUDP(unsigned char * buffer, size_t bytes) {
   DEBUG_PRINTLN("sent");
 }
 
+float batteryVoltage() {
+  pinMode(A0, INPUT);
+  return (analogRead(A0)/1023.0) * 4.2;
+}
+
 float currentTemp() {
   float tmp;
   DEBUG_PRINT("Waiting for sensor ready.");
@@ -276,7 +282,7 @@ bool firmwareUrl_callback(pb_istream_t *stream, const pb_field_t *field, void **
   return false;
 }
 
-void recvPacket() {
+void recvPacket(bool goto_sleep) {
   int cb = 0;
   unsigned long millisNow = millis();
   byte packetBuffer[128];
@@ -298,8 +304,12 @@ void recvPacket() {
   pb_istream_t stream = pb_istream_from_buffer(packetBuffer, 128);
   if(pb_decode(&stream, ServerResponse_fields, &response)) {
       if(response.goto_sleep_seconds > 0) {
-        DEBUG_PRINTF("Server wants us to sleep: %d seconds\n", response.goto_sleep_seconds);
-        sleep(response.goto_sleep_seconds);
+        DEBUG_PRINTF("Server asks to sleep for %d seconds\n", response.goto_sleep_seconds);
+        if(goto_sleep) {
+          sleep(response.goto_sleep_seconds);
+        } else {
+          DEBUG_PRINTLN("Not going to do that.");
+        }
       } else {
         DEBUG_PRINTLN("Server didn't specify sleep seconds?! Going to sleep 2 minutes.");
         sleep(120);
@@ -309,19 +319,51 @@ void recvPacket() {
   }
 }
 
-void sendReport(int temp) {
+void sendBatteryReport(float volt) {
   unsigned char buffer[SensorReport_size];
   size_t message_length;
   bool status;
-
-  // Start UDP response socket
-  UDP.begin(udpLocalPort);
 
   SensorReport message = SensorReport_init_zero;
   pb_ostream_t stream = pb_ostream_from_buffer(buffer, sizeof(buffer));
 
   message.device_id = DEVICE_ID;
-  message.sensor_id = SENSOR_ID;
+  message.sensor_id = VOLTAGE_SENSOR_ID;
+  message.which_value = SensorReport_f_tag;
+  message.value.f = volt;
+  message.wifi_failcount = rtcData.wifi_fail_count;
+  message.boot_count = rtcData.boot_count;
+  message.wifi_id = wifiId;
+  message.millis = millis();
+
+  status = pb_encode(&stream, SensorReport_fields, &message);
+  message_length = stream.bytes_written;
+
+  if (!status) {
+    DEBUG_PRINTF("Encoding failed: %s\n", PB_GET_ERROR(&stream));
+    return;
+  } else {
+    DEBUG_PRINTF("Message encoded, length: %d bytes", message_length);
+  }
+
+  DEBUG_PRINTLN("Sending packet");
+  UDP.beginPacket(udpHost, udpPort);
+  UDP.write(buffer, message_length);
+  UDP.endPacket();
+  yield();
+  recvPacket(false); // should put device to sleep
+}
+
+void sendTempReport(float temp) {
+  unsigned char buffer[SensorReport_size];
+  size_t message_length;
+  bool status;
+
+  SensorReport message = SensorReport_init_zero;
+  pb_ostream_t stream = pb_ostream_from_buffer(buffer, sizeof(buffer));
+
+  message.device_id = DEVICE_ID;
+  message.sensor_id = TEMP_SENSOR_ID;
   message.which_value = SensorReport_f_tag;
   message.value.f = temp;
   message.wifi_failcount = rtcData.wifi_fail_count;
@@ -345,11 +387,12 @@ void sendReport(int temp) {
   UDP.write(buffer, message_length);
   UDP.endPacket();
   yield();
-  recvPacket(); // should put device to sleep
+  recvPacket(true);
 }
 
 void setup() {
   startTime = millis();
+  float currentVoltage;
 
   #ifdef DEBUGPRINT
   Serial.begin(115200);
@@ -357,10 +400,15 @@ void setup() {
 
   setupRtcData();
 
+
   DEBUG_PRINTF("Boot count: %lu\n", rtcData.boot_count);
+  DEBUG_PRINTF("Current voltage: %fv\n", currentVoltage);
 
   setupTempSensor();
   wakeUpWifi(); // the sensor will do sensor stuff in the background
+  
+  currentVoltage = batteryVoltage();
+  DEBUG_PRINTF("Current voltage: %fv\n", currentVoltage);
 
   float currTemp = currentTemp();
   float tempDelta = currTemp - rtcData.prev_temp;
@@ -401,7 +449,11 @@ void setup() {
     sleep(3*60);
   }
 
-  sendReport(currTemp); // should put the device to sleep
+  // Start UDP response socket
+  UDP.begin(udpLocalPort);
+
+  sendBatteryReport(currentVoltage);
+  sendTempReport(currTemp); // should put the device to sleep
   sleep(60); // but make sure
 }
 
