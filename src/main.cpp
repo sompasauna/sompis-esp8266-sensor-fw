@@ -1,11 +1,11 @@
 #include <Arduino.h>
+#include <complex.h> // for cabsf(float)
 #include <ESP8266WiFi.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <WiFiUdp.h>
 #include "SompaData.h"
 #include <ESP8266httpUpdate.h>
-#include <AES.h>
 #include <secrets.h>
 #include <DebugPrint.h>
 
@@ -49,8 +49,6 @@ extern "C" {
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature DS(&oneWire);
 WiFiUDP UDP;
-AES aes;
-aes.set_key(aes_key, sizeof(aes_key));
 
 // Timer to know when the sensor should be ready to give a reading,
 // can do other things while waiting.
@@ -74,7 +72,7 @@ void sleep(unsigned long seconds) {
   rtcData.magic = RTC_MAGIC;
   system_rtc_mem_write(66, &rtcData, sizeof(rtcData));
   yield();
-  DEBUG_PRINTF("Total time elapsed: %d millis", millis() - startTime);
+  DEBUG_PRINTF("Total time elapsed: %lu millis", millis() - startTime);
   #ifdef DEBUGPRINT
   Serial.end();
   #endif
@@ -91,7 +89,7 @@ void setupTempSensor() {
   DEBUG_PRINTLN();
 
  // If there's no sensor address saved from previous boots, scan for it
-  if(rtcData.sensor_address[0] == 0 && (rtcData.sensor_address[1] == 0) {
+  if(rtcData.sensor_address[0] == 0 && rtcData.sensor_address[1] == 0) {
     DEBUG_PRINTLN("Onewire search..");
     oneWire.search(rtcData.sensor_address, true);
     #ifdef DEBUGPRINT
@@ -239,7 +237,7 @@ bool waitForWifi() {
     #endif
   }
 
-  DEBUG_PRINTLN("SUCCESS")
+  DEBUG_PRINTLN("SUCCESS");
   DEBUG_PRINTF("Connected to %s\n", WiFi.SSID().c_str());
   return true;
 }
@@ -256,28 +254,32 @@ bool firmwareUrl_callback(pb_istream_t *stream, const pb_field_t *field, void **
   DEBUG_PRINT("Server wants us to upgrade: '");
   DEBUG_WRITE(buf, len);
   DEBUG_PRINTLN("' firmware");
+  ESPhttpUpdate.rebootOnUpdate(true);
   t_httpUpdate_return ret = ESPhttpUpdate.update(ptr_const);
   switch(ret) {
     case HTTP_UPDATE_FAILED:
         DEBUG_PRINTF("HTTP_UPDATE_FAILD Error (%d): %s", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
+        return false;
         break;
 
     case HTTP_UPDATE_NO_UPDATES:
         DEBUG_PRINTLN("HTTP_UPDATE_NO_UPDATES");
+        return false;
         break;
 
     case HTTP_UPDATE_OK:
         DEBUG_PRINTLN("HTTP_UPDATE_OK");
-        sleep(10);
+        ESP.restart();
+        return true;
         break;
   }
+  return false;
 }
 
 void recvPacket() {
   int cb = 0;
   unsigned long millisNow = millis();
   byte packetBuffer[128];
-  byte packetBuffer_aes[128];
 
   while(cb < 1) {
     if((millis() - millisNow) > 3000) {
@@ -289,11 +291,8 @@ void recvPacket() {
       yield();
     }
   }
-  UDP.read(packetBuffer_aes, 128);
-  DEBUG_PRINTF("Received: %d bytes\n", sizeof(packetBuffer_aes));
-  DEBUG_PRINTLN("Decrypting")
-  aes.do_aes_decrypt(packetBuffer_aes, aes.get_size(), packetBuffer, aes_key, 128, aes_iv);
-  DEBUG_PRINTF("Resulted in: %d bytes", sizeof(packetBuffer));
+  UDP.read(packetBuffer, 128);
+  DEBUG_PRINTF("Received: %d bytes\n", sizeof(packetBuffer));
   ServerResponse response = ServerResponse_init_zero;
   response.firmware_url.funcs.decode = &firmwareUrl_callback;
   pb_istream_t stream = pb_istream_from_buffer(packetBuffer, 128);
@@ -312,7 +311,6 @@ void recvPacket() {
 
 void sendReport(int temp) {
   unsigned char buffer[SensorReport_size];
-  unsigned char buffer_aes[SensorReport_size];
   size_t message_length;
   bool status;
 
@@ -336,16 +334,15 @@ void sendReport(int temp) {
 
   if (!status) {
     DEBUG_PRINTF("Encoding failed: %s\n", PB_GET_ERROR(&stream));
-    sleep(60)
+    sleep(60);
   } else {
     DEBUG_PRINTF("Message encoded, length: %d bytes", message_length);
-    rtcData.prev_temp = currTemp;
+    rtcData.prev_temp = temp;
   }
 
-  aes.do_aes_encrypt(buffer, strlen((char *)buffer), buffer_aes, aes_key, 128, aes_iv);
-  DEBUG_PRINTLN("Sending packet")
+  DEBUG_PRINTLN("Sending packet");
   UDP.beginPacket(udpHost, udpPort);
-  UDP.write(buffer_aes, message_length);
+  UDP.write(buffer, message_length);
   UDP.endPacket();
   yield();
   recvPacket(); // should put device to sleep
@@ -360,7 +357,7 @@ void setup() {
 
   setupRtcData();
 
-  DEBUG_PRINTF("Boot count: %d\n", rtcData.boot_count);
+  DEBUG_PRINTF("Boot count: %lu\n", rtcData.boot_count);
 
   setupTempSensor();
   wakeUpWifi(); // the sensor will do sensor stuff in the background
@@ -383,7 +380,7 @@ void setup() {
     setupWifi();
   } else if(!setupWifiAlt()) {
     rtcData.wifi_fail_count++;
-    sleep(3*60)
+    sleep(3*60);
   }
 
   if(waitForWifi()) {
@@ -400,7 +397,7 @@ void setup() {
     }
   } else {
     rtcData.wifi_fail_count++;
-    DEBUG_PRINTF("WIFI fail count: %d\n", rtcData.wifi_fail_count);
+    DEBUG_PRINTF("WIFI fail count: %lu\n", rtcData.wifi_fail_count);
     sleep(3*60);
   }
 
