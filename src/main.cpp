@@ -12,7 +12,7 @@
 // When debug-printing, use a smaller sleep multiplier so there's no need to wait a
 // full minute or more to see next round.
 #ifdef DEBUGPRINT
-  #define SLEEP_MULTI 100
+  #define SLEEP_MULTI 1e4
 #else
   #define SLEEP_MULTI 1e6
 #endif
@@ -74,6 +74,7 @@ void sleep(unsigned long seconds) {
   system_rtc_mem_write(66, &rtcData, sizeof(rtcData));
   yield();
   DEBUG_PRINTF("Total time elapsed: %lu millis", millis() - startTime);
+  DEBUG_PRINTF("\n\n\n");
   #ifdef DEBUGPRINT
   Serial.end();
   #endif
@@ -95,7 +96,7 @@ void setupTempSensor() {
     oneWire.search(rtcData.sensor_address, true);
     #ifdef DEBUGPRINT
     DEBUG_PRINT("Sensor address:");
-    for(int i=0; i < sizeof(rtcData.sensor_address); i++) {
+    for(unsigned int i=0; i < sizeof(rtcData.sensor_address); i++) {
       DEBUG_PRINTF("%02x", rtcData.sensor_address[i]);
     }
     DEBUG_PRINTLN();
@@ -319,13 +320,35 @@ void recvPacket(bool goto_sleep) {
   }
 }
 
-void sendBatteryReport(float volt) {
-  unsigned char buffer[SensorReport_size];
-  size_t message_length;
-  bool status;
+unsigned char outBuffer[(SensorReport_size + 1) * 8];
+unsigned int outBufferSize;
 
+void appendSensorReport(SensorReport sensor_report) {
+  bool status;
+  
+  if(outBufferSize >= sizeof(outBuffer)) {
+    DEBUG_PRINTLN("outBuffer full, can't append.");
+    return;
+  }
+
+  pb_ostream_t stream = pb_ostream_from_buffer(&outBuffer[outBufferSize + 1], SensorReport_size);
+
+  status = pb_encode(&stream, SensorReport_fields, &sensor_report);
+
+  if (!status) {
+    DEBUG_PRINTF("Encoding failed: %s\n", PB_GET_ERROR(&stream));
+  } else {
+    DEBUG_PRINTF("Message encoded, length: %d bytes\n", stream.bytes_written);
+    unsigned char message_size = (unsigned char) stream.bytes_written; 
+    outBuffer[outBufferSize] = message_size;
+    outBufferSize += message_size + 1;
+    DEBUG_PRINTF("Outbuffer size now %d bytes\n", outBufferSize);
+  }
+  return;
+}
+
+SensorReport generateBatteryReport(float volt) {
   SensorReport message = SensorReport_init_zero;
-  pb_ostream_t stream = pb_ostream_from_buffer(buffer, sizeof(buffer));
 
   message.device_id = DEVICE_ID;
   message.sensor_id = VOLTAGE_SENSOR_ID;
@@ -336,31 +359,11 @@ void sendBatteryReport(float volt) {
   message.wifi_id = wifiId;
   message.millis = millis();
 
-  status = pb_encode(&stream, SensorReport_fields, &message);
-  message_length = stream.bytes_written;
-
-  if (!status) {
-    DEBUG_PRINTF("Encoding failed: %s\n", PB_GET_ERROR(&stream));
-    return;
-  } else {
-    DEBUG_PRINTF("Message encoded, length: %d bytes", message_length);
-  }
-
-  DEBUG_PRINTLN("Sending packet");
-  UDP.beginPacket(udpHost, udpPort);
-  UDP.write(buffer, message_length);
-  UDP.endPacket();
-  yield();
-  recvPacket(false); // should put device to sleep
+  return message;
 }
 
-void sendTempReport(float temp) {
-  unsigned char buffer[SensorReport_size];
-  size_t message_length;
-  bool status;
-
+SensorReport generateTempReport(float temp) {
   SensorReport message = SensorReport_init_zero;
-  pb_ostream_t stream = pb_ostream_from_buffer(buffer, sizeof(buffer));
 
   message.device_id = DEVICE_ID;
   message.sensor_id = TEMP_SENSOR_ID;
@@ -371,20 +374,16 @@ void sendTempReport(float temp) {
   message.wifi_id = wifiId;
   message.millis = millis();
 
-  status = pb_encode(&stream, SensorReport_fields, &message);
-  message_length = stream.bytes_written;
+  return message;
+}
 
-  if (!status) {
-    DEBUG_PRINTF("Encoding failed: %s\n", PB_GET_ERROR(&stream));
-    sleep(60);
-  } else {
-    DEBUG_PRINTF("Message encoded, length: %d bytes", message_length);
-    rtcData.prev_temp = temp;
-  }
+void sendReport() {
+  // Start UDP response socket
+  UDP.begin(udpLocalPort);
 
   DEBUG_PRINTLN("Sending packet");
   UDP.beginPacket(udpHost, udpPort);
-  UDP.write(buffer, message_length);
+  UDP.write(outBuffer, outBufferSize);
   UDP.endPacket();
   yield();
   recvPacket(true);
@@ -396,13 +395,11 @@ void setup() {
 
   #ifdef DEBUGPRINT
   Serial.begin(115200);
+  DEBUG_PRINTF("\n\n\n");
   #endif
 
   setupRtcData();
-
-
   DEBUG_PRINTF("Boot count: %lu\n", rtcData.boot_count);
-  DEBUG_PRINTF("Current voltage: %fv\n", currentVoltage);
 
   setupTempSensor();
   wakeUpWifi(); // the sensor will do sensor stuff in the background
@@ -415,7 +412,7 @@ void setup() {
 
   if(rtcData.prev_temp < -120) { tempDelta = 1.0; }
 
-  DEBUG_PRINTF("Current temp: %fC\n - delta: %fC\n", currTemp, tempDelta);
+  DEBUG_PRINTF("Current temp: %fC - delta: %fC\n", currTemp, tempDelta);
 
   if(cabsf(tempDelta) < 0.5) {
     DEBUG_PRINTLN("Temp delta too small, dont bother connecting WIFI");
@@ -428,7 +425,7 @@ void setup() {
     setupWifi();
   } else if(!setupWifiAlt()) {
     rtcData.wifi_fail_count++;
-    sleep(3*60);
+    sleep(60);
   }
 
   if(waitForWifi()) {
@@ -438,7 +435,7 @@ void setup() {
 
       // Store the wifi channel and BSSID to rtcData for faster connect
       rtcData.last_channel = WiFi.channel();
-      memcpy(rtcData.last_bssid, WiFi.BSSID(), 6 );
+      memcpy(rtcData.last_bssid, WiFi.BSSID(), 6);
     } else {
       // Connected to alt wifi, but count it as "failure" anyway:
       rtcData.wifi_fail_count++;
@@ -446,14 +443,12 @@ void setup() {
   } else {
     rtcData.wifi_fail_count++;
     DEBUG_PRINTF("WIFI fail count: %lu\n", rtcData.wifi_fail_count);
-    sleep(3*60);
+    sleep(60);
   }
 
-  // Start UDP response socket
-  UDP.begin(udpLocalPort);
-
-  sendBatteryReport(currentVoltage);
-  sendTempReport(currTemp); // should put the device to sleep
+  appendSensorReport(generateBatteryReport(currentVoltage));
+  appendSensorReport(generateTempReport(currTemp));
+  sendReport(); // should put the device to sleep
   sleep(60); // but make sure
 }
 
