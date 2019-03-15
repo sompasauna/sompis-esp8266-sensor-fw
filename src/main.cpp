@@ -448,6 +448,7 @@ void setup() {
 
   appendSensorReport(generateBatteryReport(currentVoltage));
   appendSensorReport(generateTempReport(currTemp));
+  rtcData.prev_temp = currTemp;
   sendReport(); // should put the device to sleep
   sleep(60); // but make sure
 }
