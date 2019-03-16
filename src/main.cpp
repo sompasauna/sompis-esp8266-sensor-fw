@@ -27,7 +27,7 @@
 #define ONE_WIRE_POWER_PIN 4
 
 // Used to identify rtc data is not corrupted or from another firmware
-#define RTC_MAGIC 0x55aaaa56
+#define RTC_MAGIC 0x55aaaa57
 
 // RTC memory data struct to pass data between deep sleep boots
 typedef struct {
@@ -36,8 +36,7 @@ typedef struct {
   unsigned long boot_count;
   unsigned long wifi_fail_count;
   byte sensor_address[8];
-  unsigned int last_channel;
-  byte last_bssid[6];
+  unsigned int use_ap_idx;
 } RtcData;
 
 RtcData rtcData;
@@ -116,6 +115,7 @@ void setupRtcData() {
     rtcData.boot_count = 0;
     rtcData.wifi_fail_count = 0;
     rtcData.prev_temp = -126.0;
+    rtcData.use_ap_idx = 0;
   } else {
     // deep sleep wake, read data from rtc memory
     system_rtc_mem_read(66, &rtcData, sizeof(rtcData));
@@ -130,20 +130,6 @@ void setupRtcData() {
   }
 }
 
-// Returns true if a wifi ap with the given ssid is found listening
-bool wifiListening(const char * ssid) {
-  int n = WiFi.scanNetworks();
-  if(n > 0) {
-    for (int i = 0; i < n; ++i) {
-      if(WiFi.SSID(i) == ssid) {
-        DEBUG_PRINTLN("Wifi found in network scan");
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 void wakeUpWifi() {
   WiFi.forceSleepWake();
   WiFi.persistent(false);
@@ -151,49 +137,16 @@ void wakeUpWifi() {
   yield();
 }
 
-void setupWifi() {
-  WiFi.config(localIp, gatewayIp, subnetIp, gatewayIp, dnsIp);
-  if(rtcData.boot_count == 0 || rtcData.wifi_fail_count > 3) {
-    WiFi.begin(wifi_SSID, wifi_PWD);
+void setupWifi(wifiAp wifi_ap) {
+  if(wifi_ap.static_ip) {
+    WiFi.config(localIp, gatewayIp, subnetIp, gatewayIp, dnsIp);
   } else {
-    // Use saved wifi channel & bssid to connect faster
-    WiFi.begin(wifi_SSID, wifi_PWD, rtcData.last_channel, rtcData.last_bssid, true);
+    WiFi.config(0, 0, 0, 0, 0);
   }
-  WiFi.setAutoConnect(true);
-  WiFi.setAutoReconnect(true);
+  WiFi.begin(wifi_ap.ssid, wifi_ap.password, wifi_ap.channel, wifi_ap.bssid, true);
+  WiFi.setAutoConnect(false);
+  WiFi.setAutoReconnect(false);
   yield();
-  wifiId = 1;
-}
-
-bool setupWifiAlt() {
-  if(wifiListening(wifi_SSID_ALT)) {
-    WiFi.begin(wifi_SSID_ALT, wifi_PWD_ALT);
-    WiFi.setAutoConnect(true);
-    WiFi.setAutoReconnect(true);
-    yield();
-    wifiId = 2;
-    return true;
-  }
-
-  if(wifiListening(wifi_SSID_ALT_2)) {
-    WiFi.begin(wifi_SSID_ALT_2);
-    WiFi.setAutoConnect(true);
-    WiFi.setAutoReconnect(true);
-    wifiId = 3;
-    return true;
-  }
-
-  return false;
-}
-
-void sendUDP(unsigned char * buffer, size_t bytes) {
-  DEBUG_PRINT("Sending UDP packet..");
-  UDP.beginPacket(udpHost, udpPort);
-  DEBUG_PRINT('.');
-  UDP.write(buffer, bytes);
-  DEBUG_PRINT('.');
-  UDP.endPacket();
-  DEBUG_PRINTLN("sent");
 }
 
 float batteryVoltage() {
@@ -354,10 +307,6 @@ SensorReport generateBatteryReport(float volt) {
   message.sensor_id = VOLTAGE_SENSOR_ID;
   message.which_value = SensorReport_f_tag;
   message.value.f = volt;
-  message.wifi_failcount = rtcData.wifi_fail_count;
-  message.boot_count = rtcData.boot_count;
-  message.wifi_id = wifiId;
-  message.millis = millis();
 
   return message;
 }
@@ -369,7 +318,6 @@ SensorReport generateTempReport(float temp) {
   message.sensor_id = TEMP_SENSOR_ID;
   message.which_value = SensorReport_f_tag;
   message.value.f = temp;
-  message.wifi_failcount = rtcData.wifi_fail_count;
   message.boot_count = rtcData.boot_count;
   message.wifi_id = wifiId;
   message.millis = millis();
@@ -402,10 +350,10 @@ void setup() {
   DEBUG_PRINTF("Boot count: %lu\n", rtcData.boot_count);
 
   setupTempSensor();
-  wakeUpWifi(); // the sensor will do sensor stuff in the background
-  
+
   currentVoltage = batteryVoltage();
   DEBUG_PRINTF("Current voltage: %fv\n", currentVoltage);
+  appendSensorReport(generateBatteryReport(currentVoltage));
 
   float currTemp = currentTemp();
   float tempDelta = currTemp - rtcData.prev_temp;
@@ -419,34 +367,24 @@ void setup() {
     sleep(60);
   }
 
-  // Try main wifi until it fails 10 times or if the other wifis have been
-  // used (or failed) for over 10 times already, maybe the main wifi is back up.
-  if(rtcData.wifi_fail_count < 10 || rtcData.wifi_fail_count > 30) {
-    setupWifi();
-  } else if(!setupWifiAlt()) {
-    rtcData.wifi_fail_count++;
-    sleep(60);
-  }
+  wakeUpWifi();
 
+  DEBUG_PRINTF("Configuring wifi #%d\n", rtcData.use_ap_idx);
+  setupWifi(wifiApList[rtcData.use_ap_idx]);
   if(waitForWifi()) {
-    if(WiFi.SSID() == wifi_SSID) {
-      DEBUG_PRINTLN("Reset WIFI fail count, connected to primary Wifi");
-      rtcData.wifi_fail_count = 0;
-
-      // Store the wifi channel and BSSID to rtcData for faster connect
-      rtcData.last_channel = WiFi.channel();
-      memcpy(rtcData.last_bssid, WiFi.BSSID(), 6);
-    } else {
-      // Connected to alt wifi, but count it as "failure" anyway:
-      rtcData.wifi_fail_count++;
-    }
+    rtcData.wifi_fail_count = 0;
+    wifiId = wifiApList[0].id;
   } else {
     rtcData.wifi_fail_count++;
-    DEBUG_PRINTF("WIFI fail count: %lu\n", rtcData.wifi_fail_count);
+    if(rtcData.wifi_fail_count > 2) {
+      rtcData.use_ap_idx++;
+      if(rtcData.use_ap_idx >= sizeof(wifiApList)) {
+        rtcData.use_ap_idx = 0;
+      }
+    }
     sleep(60);
   }
 
-  appendSensorReport(generateBatteryReport(currentVoltage));
   appendSensorReport(generateTempReport(currTemp));
   rtcData.prev_temp = currTemp;
   sendReport(); // should put the device to sleep
