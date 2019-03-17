@@ -20,7 +20,8 @@
 #define DEVICE_ID 1
 #define TEMP_SENSOR_ID 1
 #define VOLTAGE_SENSOR_ID 2
-
+// Go into power save mode at POWER_SAVE_MIN volts.
+#define POWER_SAVE_MIN_V 2.85
 // Data (yellow) is connected to GPIO5
 #define ONE_WIRE_BUS 5
 // Power (red) is connected to GPIO4 which will be pulled up when measuring
@@ -347,12 +348,24 @@ void setup() {
   #endif
 
   setupRtcData();
+  
+  currentVoltage = batteryVoltage();
+  DEBUG_PRINTF("Current voltage: %fv\n", currentVoltage);
+
+  float minDelta;
+
+  // When in power save, report only 5C steps
+  if(currentVoltage < POWER_SAVE_MIN_V) {
+    DEBUG_PRINTLN("In power save mode");
+    minDelta = 5;
+  } else {
+    minDelta = 0.5;
+  }
+
   DEBUG_PRINTF("Boot count: %lu\n", rtcData.boot_count);
 
   setupTempSensor();
 
-  currentVoltage = batteryVoltage();
-  DEBUG_PRINTF("Current voltage: %fv\n", currentVoltage);
   appendSensorReport(generateBatteryReport(currentVoltage));
 
   float currTemp = currentTemp();
@@ -362,7 +375,7 @@ void setup() {
 
   DEBUG_PRINTF("Current temp: %fC - delta: %fC\n", currTemp, tempDelta);
 
-  if(cabsf(tempDelta) < 0.5) {
+  if(cabsf(tempDelta) < minDelta) {
     DEBUG_PRINTLN("Temp delta too small, dont bother connecting WIFI");
     sleep(60);
   }
