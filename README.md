@@ -2,6 +2,13 @@
 
 Firmware for the ESP8266 based temperature sensors for [Sompasauna](https://sompasauna.fi/).
 
+## TLDR
+
+- ESP8266
+- DS18B20
+- AES-128-CBC + CRC16 plain text ascii protocol over UDP or TCP.
+- No MQTT
+
 ## Usage
 
 It's a platformio project, you can probably load it into it.
@@ -62,5 +69,3 @@ Issues and PR's welcome. You're also welcome to [Sompasauna](https://sompasauna.
 # License
 
  [![License: CC BY-SA 4.0](https://licensebuttons.net/l/by-sa/4.0/80x15.png)](https://creativecommons.org/licenses/by-sa/4.0/) Creative Commons Attribution-ShareAlike 4.0 International
-
-Public domain
