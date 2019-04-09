@@ -12,7 +12,7 @@ const unsigned int apiUDPPort = 9919;
 const unsigned int apiTCPPort = 9920;
 
 // Using a static IP avoids DHCP and speeds up connection. Only used on primary wifi AP.
-const IPAddress localIp(10,0,0,200);
+const IPAddress localIp(10,0,0,200+DEVICE_ID);
 const IPAddress gatewayIp(10,0,0,1); 
 const IPAddress subnetIp(255,255,255,0);
 const IPAddress dnsIp(127,0,0,1);
@@ -33,3 +33,5 @@ const struct wifiAp wifiApList[5] = {
   { 4, false, "Helsinki City Open WLAN", NULL, 11, { 0x00, 0x87, 0x31, 0xD7, 0xFE, 0x02 } },
   { 5, false, "Helsingfors stads WLAN", NULL, 11, { 0x00, 0x87, 0x31, 0xD7, 0xFE, 0x03 } }
 };
+
+const size_t wifiApListSize = sizeof(wifiApList)/sizeof(wifiApList[0]);

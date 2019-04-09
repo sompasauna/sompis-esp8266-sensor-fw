@@ -10,9 +10,7 @@
 #include <DebugPrint.h> // For serial printing while developing
 unsigned long startTime = millis();
 
-#define FW_VERSION "v2"
-
-WiFiClient plainWifi;
+#define FW_VERSION "v7"
 
 #define BUFFER_SIZE 256
 byte outputBuffer[BUFFER_SIZE] { 0 };
@@ -29,11 +27,9 @@ AES aes;
   #define SLEEP_MULTI 1e6
 #endif
 
-#define DEVICE_ID 1
-#define TEMP_SENSOR_ID 1
+// #define DEVICE_ID 2
 // Go into power save mode at POWER_SAVE_MIN volts.
 // The battery is connected via a voltage divider to ADC of ESP8266.
-#define VOLTAGE_SENSOR_ID 2
 #define POWER_SAVE_MIN_V 2.9
 // Data (yellow) is connected to GPIO5
 #define ONE_WIRE_BUS 5
@@ -247,7 +243,9 @@ unsigned int decrypt(byte* enciphered, byte *iv, uint8_t *key, byte* output, int
   }
 
   unsigned int without_crc_size = result_size - 4;
-  DEBUG_PRINTF("Decrypted unpadded size without CRC: %d bytes\n", without_crc_size);
+  DEBUG_PRINTF("Decrypted unpadded size without CRC: %d bytes\nBuffer:\n", without_crc_size);
+  DEBUG_WRITE(output, without_crc_size);
+  DEBUG_PRINTLN();
 
   unsigned int calculated_crc = crc16.xmodem((uint8_t *)output, without_crc_size);
   char crc_hex[4]; 
@@ -344,7 +342,7 @@ float currentTemp() {
 bool firmwareUpgrade(char *url) {
   ESPhttpUpdate.rebootOnUpdate(true);
   yield();
-  t_httpUpdate_return ret = ESPhttpUpdate.update(url);
+  t_httpUpdate_return ret = ESPhttpUpdate.update(String(url), String(FW_VERSION));
   switch(ret) {
     case HTTP_UPDATE_FAILED:
         DEBUG_PRINTF("HTTP_UPDATE_FAILD Error (%d): %s", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
@@ -527,7 +525,7 @@ void setup() {
   float currTemp = currentTemp();
   float tempDelta = currTemp - rtcData.prev_temp;
   
-  sprintf((char *)plaintextBuffer, "D:%d|b:%.3f|B:%lu|W:%d|t:%.2f|V:%s|R:%d", DEVICE_ID, currentVoltage, rtcData.boot_count, rtcData.use_ap_idx, currTemp, FW_VERSION, WiFi.RSSI());
+  sprintf((char *)plaintextBuffer, "D:%d|b:%.3f|W:%d|t:%.2f|V:%s", DEVICE_ID, currentVoltage, rtcData.use_ap_idx, currTemp, FW_VERSION);
 
   if(rtcData.prev_temp < -120) { tempDelta = minDelta + 1.0; }
 
@@ -552,7 +550,7 @@ void setup() {
     if(rtcData.wifi_fail_count > 2) {
       rtcData.use_ap_idx++;
       rtcData.udp_fail_count = 0;
-      if(rtcData.use_ap_idx >= sizeof(wifiApList)) {
+      if(rtcData.use_ap_idx > wifiApListSize - 1) {
         rtcData.use_ap_idx = 0;
       }
     }
@@ -561,7 +559,7 @@ void setup() {
 
   unsigned int bytesRead = 0;
 
-  if(rtcData.udp_fail_count < 2) {
+  if(rtcData.udp_fail_count < 2 || rtcData.boot_count % 20 == 0) {
     bytesRead = udpRequest((char *)outputBuffer, (char *)aesIV, (char *)encryptedBuffer, payload_size); 
     if(bytesRead > 0) { rtcData.udp_fail_count = 0; }
   }
